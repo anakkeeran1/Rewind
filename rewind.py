@@ -50,6 +50,7 @@ agentdir = config['settings']['agentdir']
 newpackagename = config['settings']['newpackagename']
 oldpackagename = config['settings']['oldpackagename']
 rollback_path = config['settings']['rollback_path']
+
 dsn = DB_HOST+":"+DB_PORT+"/"+DB_SERVICE_NAME
 step = 'test'
 
@@ -149,9 +150,11 @@ def run_a_tf(task_name, runajobclipath):
     logname = f"runajob_log_{date_str}.txt"
 
     # Run the Mapping task using RunAJobCli and check status
-    cmd = f"{runajobclipath}/cli.sh runAJobCli -u {username} -p {password} -t TASKFLOW -un {task_name}"
+    cmd = f"{runajobclipath}/cli.sh runAJobCli -u {username} -p {password} -t TASKFLOW -un {task_name} -d"
+    print(cmd)
     with open(logname, "w") as logfile:
         process = subprocess.run(cmd, shell=True, stdout=logfile, stderr=subprocess.STDOUT)
+        print(process.returncode)
 
     # Check status of the runajobcli command output
     if process.returncode == 0:
@@ -247,6 +250,8 @@ def get_tf_from_db(connector):
     tf_temp = json.dumps(result)
     tf_temp = str(tf_temp)
     tf = tf_temp.replace('[["', '').replace('"]]', '')
+
+    return tf
 
 
 def audit_log_entry(connector,step,username):
@@ -349,7 +354,7 @@ def validate_steps(connector):
         exit()
 
 
-def fetch_db_data(connector):
+def process_rollback(connector):
     # Connect to the Oracle database
     connection = cx_Oracle.connect(DB_USER, DB_PASSWORD,dsn )
 
@@ -370,16 +375,138 @@ def fetch_db_data(connector):
         #call function to execute the steps
         process_command(step_rep)
 
-
-
     # Close the cursor and connection
     cursor.close()
+
+def replace_string(identifier,newvalue):
+    # File path
+    file_path = "config.ini"
+
+    # The identifier and the new value
+    identifier = identifier
+    new_value = newvalue
+
+    # Read the file and modify the value for the identifier
+    with open(file_path, "r") as file:
+        lines = file.readlines()
+
+    # Search and replace the value for the identifier
+    for i in range(len(lines)):
+        if identifier in lines[i]:
+            key, _ = lines[i].split("=")  # Splits at the "="
+            lines[i] = f"{key}={new_value}\n"  # Updates the value
+            break
+    # Write the updated lines back to the file
+    with open(file_path, "w") as file:
+        file.writelines(lines)
+
+    print("Value replaced successfully!")
+
+
+def rollback(connector, session_id, service_url, runajobclipath, folderpath):
+    """
+    Manages the rollback process, including stopping and restarting the agent, and running required jobs.
+
+    Args:
+        connector (str): The connector to be rolled back.
+        session_id (str): Current session ID for API requests.
+        service_url (str): Base URL of the service.
+        source_mtt (str): Source mapping task name.
+        target_mtt (str): Target mapping task name.
+        runajobclipath (str): Path to the RunAJobCli.
+        folderpath (str): Folder path for the tasks.
+    """
+    print("Starting rollback process...")
+    # Rollback start and timestamp to audit
+
+    # Logic to get the taskflow name from db(Arun)
+    tf = get_tf_from_db(connector)
+    print(tf)
+
+    # Get initial agent service status
+    _, current_status = get_agent_service(service_url, session_id)
+
+    while current_status != "RUNNING":
+        print(f"Agent Status = {current_status}. Please ensure the agent is running and configured correctly.")
+        retry = input("Press 'y' to retry or 'n' to end the job: ").lower()
+        if retry == 'n':
+            print("Exiting logic - Agent is not running.")
+            return
+        _, current_status = get_agent_service(service_url, session_id)
+
+    # Trigger initial jobs
+    trigger_job_status = trigger_jobs(tf, runajobclipath)
+
+    while trigger_job_status != "Success":
+        print("Trigger jobs failed. Check the session log for details.")
+        retry = input("Press 'y' to retry or 'n' to end the job: ").lower()
+        if retry == 'n':
+            print("Exiting logic - Trigger jobs failed.")
+            return
+        trigger_job_status = trigger_jobs(tf, runajobclipath)
+
+
+    #validate the rollback steps
+    validate_steps(connector)
+
+    print("Stopping Secure Agent...")
+    # Stop the agent
+    agent_loop("shutdown", service_url, session_id)
+
+    # Placeholder for rollback steps
+    #validate_steps(connector)
+    # Audit: User's input
+    process_rollback(connector)
+    # Audit: Rollback steps
+
+    print("Starting Secure Agent...")
+    # Start the agent
+    agent_loop("startup", service_url, session_id)
+
+    print("Setting DIS properties...")
+    # Set DIS properties
+    set_DISProp(service_url, session_id)
+
+    # Ensure DIS is running
+    _, current_status = get_agent_service(service_url, session_id)
+    while current_status != "RUNNING":
+        print(f"Current Agent Status: {current_status}. Please ensure DIS is configured correctly.")
+        time.sleep(10)
+        _, current_status = get_agent_service(service_url, session_id)
+
+    print("New DIS Started!")
+
+    # Trigger final jobs
+    final_trigger_status = trigger_jobs(tf, runajobclipath)
+    while final_trigger_status != "Success":
+        print("Final job(s) failed after rollback. Check the session log for details.")
+        retry = input("Press 'y' to retry or 'n' to end the job: ").lower()
+        if retry == 'n':
+            print("Exiting logic - Final jobs failed.")
+            return
+        final_trigger_status = trigger_jobs(tf, runajobclipath)
+
+    print("All jobs completed successfully!")
+
+api_url = f'{loginURL}/saas/public/core/v3/login'
+data = {'username': f'{username}', 'password': f'{password}'}
+headers = {'Content-Type': 'application/json'}
+sessionID = getSessionID(api_url, data, headers)
 
 
 # Get user input for the filter
 connector = input("Enter the Connector Name:  ")
-username = input("Enter the user name: ")
-validate_steps(connector)
-fetch_db_data(connector)
-audit_log_entry(connector,'Test',username)
+runninguser = input("Enter the user name: ")
+oldpackagename = input("Enter the oldpackage name:")
+replace_string("oldpackagename=",oldpackagename)
+newpackagename = input("Enter the newpackage name:")
+replace_string("newpackagename=",newpackagename)
+
+rollback(
+    connector=connector,
+    session_id=sessionID,
+    service_url=serviceURL,
+    runajobclipath=runajobclipath,
+    folderpath=folderpath
+)
 
