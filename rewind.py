@@ -56,7 +56,7 @@ step = 'test'
 
 timestamp = time.strftime('%Y%m%d%H%M%S', time.localtime())
 
-#Adams Section
+
 #Get Session ID for IICS API Calls.
 def getSessionID(url, data=None, headers=None):
     try:
@@ -84,7 +84,7 @@ def getSessionID(url, data=None, headers=None):
 
 #Get the Secure Agent DIS Status.
 def get_agent_service(service_url, session_id):
-    url = f"{service_url}/api/v2/agent/details/01C7NV0800000000000C"
+    url = f"{service_url}/api/v2/agent/details/0100CW080000000000B3"
 
     headers = {
         "Content-Type": "application/json",
@@ -116,7 +116,7 @@ def get_agent_service(service_url, session_id):
 
 #Set a DIS Property to force a new version spin-up.
 def set_DISProp(service_url, session_id):
-    url = f"{service_url}/api/v2/runtimeEnvironment/01C7NV25000000000008/configs/linux64"
+    url = f"{service_url}/api/v2/runtimeEnvironment/0100CW080000000000B3/configs/linux64"
 
     # Data to be sent in the PUT request
     data = {
@@ -151,7 +151,7 @@ def run_a_tf(task_name, runajobclipath):
 
     # Run the Mapping task using RunAJobCli and check status
     cmd = f"{runajobclipath}/cli.sh runAJobCli -u {username} -p {password} -t TASKFLOW -un {task_name} -d"
-    print(cmd)
+    #print(cmd)
     with open(logname, "w") as logfile:
         process = subprocess.run(cmd, shell=True, stdout=logfile, stderr=subprocess.STDOUT)
         print(process.returncode)
@@ -198,7 +198,7 @@ def start_stop_agent(action):
         subprocess.run(["./infaagent.sh", "startup"])
         # Optional statement post startup
         os.chdir(rewind_tool_path)
-        print("Agent is started")
+        
     else:
         # Shutdown the agent
         subprocess.run(["./infaagent.sh", "shutdown"])
@@ -214,7 +214,6 @@ def agent_loop(action, service_url, session_id):
         service_url (str): Base URL of the service.
         session_id (str): The current session ID for API requests.
     """
-    print(f"{action.capitalize()}ing Agent...")
 
     # Start or stop the agent based on the action
     start_stop_agent(action)
@@ -230,8 +229,6 @@ def agent_loop(action, service_url, session_id):
         _, current_status = get_agent_service(service_url, session_id)
 
     print(f"Agent {action.capitalize()} done!")
-
-#Arun's Section
 
 def get_tf_from_db(connector):
     #Get Taskflow name from database
@@ -267,7 +264,6 @@ def audit_log_entry(connector,step,username):
     # Close the cursor and connection
     cursor.close()
     connection.close()
-    print("Row inserted successfully.")
 
 def process_command(command):
 #    command='copy all from /home/infaadmin/Tools/rewindTool/agentdir/downloads/newpackage to /home/infaadmin/Tools/rewindTool/backup/newpackage'
@@ -302,7 +298,7 @@ def process_command(command):
         source = "".join(src)
         if os.path.exists(source):
             os.remove(source)
-            print(f"File {source} has been removed.")
+            #print(f"File {source} has been removed.")
     elif lower_first_three_words == ["remove", "all", "from"]:
         src = words[3:4]
         source = "".join(src)
@@ -368,10 +364,10 @@ def process_rollback(connector):
     cursor.execute(query, connector=connector)
 
     for row in cursor:
-        print(f"STEP_NAME: {row[0]}, STEPS: {row[1]}")
+        #print(f"STEP_NAME: {row[0]}, STEPS: {row[1]}")
         step="".join({row[1]})
         step_rep = step.replace("<agentdir>",agentdir).replace("<newpackagename>",newpackagename).replace("<backupdir>",backupdir).replace("<rollback_path>",rollback_path).replace("<oldpackagename>",oldpackagename)
-        print("step**:",step_rep)
+        #print("step**:",step_rep)
         #call function to execute the steps
         process_command(step_rep)
 
@@ -462,7 +458,8 @@ def rollback(connector, session_id, service_url, runajobclipath, folderpath):
     print("Starting Secure Agent...")
     # Start the agent
     agent_loop("startup", service_url, session_id)
-
+    print("Agent is started")
+    
     print("Setting DIS properties...")
     # Set DIS properties
     set_DISProp(service_url, session_id)
@@ -473,7 +470,8 @@ def rollback(connector, session_id, service_url, runajobclipath, folderpath):
         print(f"Current Agent Status: {current_status}. Please ensure DIS is configured correctly.")
         time.sleep(10)
         _, current_status = get_agent_service(service_url, session_id)
-
+    
+    time.sleep(30)  # Wait after new DIS is Running
     print("New DIS Started!")
 
     # Trigger final jobs
